@@ -233,7 +233,8 @@ def get_gemini_analysis(resume_text, jd_text):
     Returns a structured JSON response with score, strengths, and improvements.
     """
     apiKey = st.secrets["GEMINI_API_KEY"]
-    apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={apiKey}"
+    apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/129
+    :generateContent?key={apiKey}"
 
     system_prompt = """
     You are an expert Applicant Tracking System (ATS) and a professional career coach. Your task is to analyze a resume against a job description.
