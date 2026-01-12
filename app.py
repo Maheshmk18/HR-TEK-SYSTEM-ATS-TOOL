@@ -217,7 +217,7 @@ try:
         reader = PyPDF2.PdfReader(uploaded_file)
         text = "".join(page.extract_text() for page in reader.pages if page.extract_text())
         return text.strip()
-        except PyPDF2.errors.PdfReadError:
+    except PyPDF2.errors.PdfReadError:
         st.error("This PDF file appears to be corrupted or password-protected. Please upload a different file.")
         return None
         except Exception as e:
