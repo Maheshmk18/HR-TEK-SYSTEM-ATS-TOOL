@@ -192,20 +192,54 @@ Job Description:
 
     headers = {"Content-Type": "application/json"}
 
-    try:
-        response = requests.post(api_url, headers=headers, json=payload, timeout=120)
-        response.raise_for_status()
+    max_retries = 2
+    delay = 2  # seconds
 
-        result = response.json()
-        raw_text = result["candidates"][0]["content"]["parts"][0]["text"]
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(
+                api_url,
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
 
-        cleaned_text = raw_text.replace("```json", "").replace("```", "").strip()
-        return json.loads(cleaned_text)
+            # 🔴 RATE LIMIT HANDLING
+            if response.status_code == 429:
+                if attempt < max_retries:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                else:
+                    st.warning(
+                        "🚦 High traffic right now. Please wait 1–2 minutes and try again."
+                    )
+                    return None
 
-    except Exception as e:
-        st.error("Gemini analysis failed.")
-        st.code(response.text if "response" in locals() else str(e))
-        return None
+            response.raise_for_status()
+
+            result = response.json()
+            raw_text = result["candidates"][0]["content"]["parts"][0]["text"]
+
+            cleaned_text = (
+                raw_text.replace("```json", "")
+                .replace("```", "")
+                .strip()
+            )
+
+            return json.loads(cleaned_text)
+
+        except json.JSONDecodeError:
+            st.error("⚠️ AI response was malformed. Please retry once.")
+            return None
+
+        except requests.exceptions.RequestException:
+            st.warning(
+                "⚠️ Temporary AI service issue. Please retry in a moment."
+            )
+            return None
+
+    return None
 
 # ---------------- UI ----------------
 st.markdown('<h1 class="main-title">ATS Resume Compatibility Checker</h1>', unsafe_allow_html=True)
