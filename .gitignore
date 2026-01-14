@@ -1,2 +1,5 @@
 /Resumes
 Document - IT Interns JD.pdf
+.env
+.streamlit/
+__pycache__/
