@@ -1,8 +1,4 @@
-scikit-learn
 nltk
 PyPDF2
 streamlit
 requests
-pytesseract
-pdf2image
-Pillow

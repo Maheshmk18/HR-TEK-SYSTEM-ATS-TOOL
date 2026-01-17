@@ -1,5 +1,9 @@
 /Resumes
 Document - IT Interns JD.pdf
 .env
-.streamlit/
+.streamlit/secrets.toml
+diagnose_api.py
+*.pyc
 __pycache__/
+STREAMLIT_CLOUD_DEPLOYMENT.md
+SECURITY_DEPLOYMENT.md

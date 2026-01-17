@@ -1,25 +1,11 @@
 import streamlit as st
 import nltk
+import os
 import io
 import requests
 import json
 import re
 import PyPDF2
-import os
-from dotenv import load_dotenv
-import time
-from concurrent.futures import ThreadPoolExecutor
-
-# Load environment variables from .env if it exists
-load_dotenv()
-# OCR imports
-try:
-    import pytesseract
-    from pdf2image import convert_from_bytes
-    from PIL import Image
-    OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
 
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(
@@ -34,41 +20,12 @@ MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: hidden;}
 
-/* Main Title */
 .main-title {
     text-align: center;
-    font-size: 4rem !important;
-    font-weight: 800 !important;
-    margin-bottom: 0.5rem;
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin-bottom: 1rem;
     color: #2563eb;
-}
-
-/* Subtitle */
-.subtitle {
-    text-align: center;
-    font-size: 1.8rem !important;
-    color: #4b5563;
-    margin-bottom: 2rem;
-    font-weight: 500;
-}
-
-/* Headers (Resume, Intern Role, Job Description) */
-h2 {
-    font-size: 2.2rem !important;
-    font-weight: 700 !important;
-    color: #1e3a8a !important;
-    padding-bottom: 0.5rem;
-}
-
-/* Widget Labels */
-.stRadio p, .stSelectbox label, .stFileUploader label, .stTextInput label {
-    font-size: 1.4rem !important;
-    font-weight: 600 !important;
-}
-
-/* Radio button options */
-.stRadio div[role='radiogroup'] label {
-    font-size: 1.2rem !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -147,28 +104,11 @@ def extract_file_id_from_gdrive_url(url):
 def download_file_from_gdrive(file_id):
     try:
         url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        session = requests.Session()
-        response = session.get(url, stream=True)
+        response = requests.get(url, stream=True)
 
-        # Handle 'virus scan' warning by looking for cookies
-        for key, value in response.cookies.items():
-            if key.startswith('download_warning'):
-                params = {'id': file_id, 'confirm': value}
-                response = session.get(url, params=params, stream=True)
-                break
-
-        if response.status_code == 200:
-            if response.content.startswith(b"%PDF"):
-                return response.content
-            elif b"<!DOCTYPE html>" in response.content or b"<html" in response.content:
-                st.error("⚠️ Google Drive link is not public. Please change permissions to 'Anyone with the link can view'.")
-                return None
-            else:
-                st.error("⚠️ Downloaded file is not a valid PDF.")
-                return None
-        else:
-            st.error(f"⚠️ Google Drive download failed. Status code: {response.status_code}")
-            return None
+        if response.status_code == 200 and response.content.startswith(b"%PDF"):
+            return response.content
+        return None
 
     except Exception as e:
         st.error(f"Google Drive download error: {e}")
@@ -185,29 +125,13 @@ def extract_text_from_gdrive_pdf(file_content):
                 text += page.extract_text()
 
         text = text.strip()
-        if not text and OCR_AVAILABLE:
-            st.info("ℹ️ Scanned PDF detected. Attempting OCR extraction...")
-            text = extract_text_with_ocr(file_content)
+        if not text:
+            st.warning("⚠️ This appears to be a scanned PDF. Please upload a text-based PDF.")
 
         return text if text else None
 
     except Exception as e:
         st.error(f"PDF read error: {e}")
-        return None
-
-# ---------------- OCR HELPER ----------------
-def extract_text_with_ocr(pdf_content):
-    if not OCR_AVAILABLE:
-        return None
-    try:
-        images = convert_from_bytes(pdf_content, dpi=300)
-        extracted_text = ""
-        for image in images:
-            page_text = pytesseract.image_to_string(image, lang='eng')
-            extracted_text += page_text + "\n"
-        return extracted_text.strip()
-    except Exception as e:
-        st.error(f"OCR processing failed: {e}")
         return None
 
 # ---------------- PDF UPLOAD ----------------
@@ -221,10 +145,8 @@ def extract_text_from_pdf(uploaded_file):
                 text += page.extract_text()
         
         text = text.strip()
-        if not text and OCR_AVAILABLE:
-             st.info("ℹ️ Scanned PDF detected. Attempting OCR extraction...")
-             uploaded_file.seek(0)
-             text = extract_text_with_ocr(uploaded_file.read())
+        if not text:
+            st.warning("⚠️ This appears to be a scanned PDF. Please upload a text-based PDF.")
 
         return text if text else None
 
@@ -238,60 +160,24 @@ def extract_text_from_pdf(uploaded_file):
 
 # ---------------- GEMINI API ----------------
 def get_gemini_analysis(resume_text, jd_text):
-    # Try to get API key from streamlit secrets, then environment variable
-    api_key = None
-    try:
-        if "GEMINI_API_KEY" in st.secrets:
-            api_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        pass
-    
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        st.error("❌ GEMINI_API_KEY not found. Please set it in .streamlit/secrets.toml or a .env file.")
-        return None
-
-    api_url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/gemini-2.5-flash:generateContent?key={api_key}"
-    )
-
+    api_key = st.secrets["GEMINI_API_KEY"]
     prompt = f"""
-You are an advanced, enterprise-grade Applicant Tracking System (ATS) used by top technology companies.
-Your goal is to evaluate the resume against the job description with high strictness and accuracy.
+You are an expert ATS system.
 
-**Analysis Rules:**
-1. **Strict Keyword Matching**: Check for specific technical skills (e.g., Python, AWS, React) mentioned in the Job Description. Missing critical skills should lower the score.
-2. **Contextual Analysis**: Do not just look for keywords; ensure the candidate has *experience* using them (e.g., "Used Python for data analysis" is better than just listing "Python").
-3. **Scoring Logic**:
-   - 90-100%%: Perfect match, exceeds requirements (Topper/Ideal Candidate).
-   - 75-89%%: Strong match, fits most requirements.
-   - 50-74%%: Average match, gaps in critical skills.
-   - <50%%: Poor match, missing major requirements.
+Analyze the resume against the job description.
 
-**Output Requirement:**
-Return a valid JSON object with detailed feedback:
+Return ONLY valid JSON in this format:
+
 {{
-  "compatibilityScore": <integer 0-100>,
-  "strengths": [
-    "<Technical Skill Match: e.g., 'Strong proficiency in AWS and Terraform as required'>",
-    "<Experience Match: e.g., 'Relevant internship experience in Cloud DevOps'>",
-    "<Soft Skill/Formatting: e.g., 'Clear project descriptions and quantified achievements'>"
-  ],
-  "areasForImprovement": [
-    "<Missing Skill: e.g., 'Missing explicit mention of CI/CD pipelines (Jenkins/GitLab)'>",
-    "<Experience Gap: e.g., 'No prior experience with containerization (Docker/Kubernetes) which is a key requirement'>",
-    "<Formatting/Detail: e.g., 'Project sections lack metrics or outcomes'>"
-  ]
+  "compatibilityScore": 0-100,
+  "strengths": "- bullet points",
+  "areasForImprovement": "- bullet points"
 }}
 
-**Data for Analysis:**
-RESUME:
+Resume:
 {resume_text}
 
-JOB DESCRIPTION:
+Job Description:
 {jd_text}
 """
 
@@ -302,6 +188,12 @@ JOB DESCRIPTION:
                 "parts": [{"text": prompt}]
             }
         ],
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+        ],
         "generationConfig": {
             "temperature": 0.3,
             "maxOutputTokens": 8192,
@@ -309,35 +201,73 @@ JOB DESCRIPTION:
         }
     }
 
-    headers = {"Content-Type": "application/json"}
+    models = [
+        "gemini-2.0-flash",
+        "gemini-flash-latest",
+    ]
 
-    max_retries = 2
-    delay = 2  # seconds
+    import time
+    
+    last_error_msg = "Unknown error"
+    
+    for model in models:
+        api_url = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{model}:generateContent?key={api_key}"
+        )
 
-    for attempt in range(max_retries + 1):
+        headers = {"Content-Type": "application/json"}
+        
         try:
             response = requests.post(
                 api_url,
                 headers=headers,
                 json=payload,
-                timeout=60
+                timeout=30
             )
 
-            # 🔴 RATE LIMIT HANDLING
+            if response.status_code == 404:
+                last_error_msg = f"Model {model} not found or not supported."
+                print(f"DEBUG: 404 for model {model}")
+                continue
+            
+            if response.status_code == 400:
+                try:
+                    error_detail = response.json()
+                    print(f"DEBUG: 400 Error - {error_detail}")
+                except:
+                    print(f"DEBUG: 400 Error - {response.text}")
+                st.error("🚫 Unable to process the request. Please try again.")
+                return None
+
+            if response.status_code == 401:
+                print(f"DEBUG: 401 Unauthorized")
+                st.error("🚫 Authentication failed. Please contact support.")
+                return None
+
             if response.status_code == 429:
-                if attempt < max_retries:
-                    time.sleep(delay)
-                    delay *= 2
-                    continue
-                else:
-                    st.warning(
-                        "🚦 High traffic right now. Please wait 1–2 minutes and try again."
-                    )
-                    return None
+                 print(f"DEBUG: 429 Rate limit for {model}")
+                 last_error_msg = "Service temporarily unavailable. Please try again later."
+                 continue
 
-            response.raise_for_status()
-
+            if response.status_code != 200:
+                try:
+                    error_detail = response.json()
+                    print(f"DEBUG: {response.status_code} Error - {error_detail}")
+                    last_error_msg = f"Service error ({response.status_code}). Please try again."
+                except:
+                    print(f"DEBUG: {response.status_code} Error - {response.text[:200]}")
+                    last_error_msg = "Service error. Please try again."
+                continue
+            
+            # If we get here, the request was successful
             result = response.json()
+            
+            # Check if candidates exist (handling safety blocks)
+            if not result.get("candidates") or not result["candidates"][0].get("content"):
+                st.error("⚠️ Unable to analyze this resume. Please try a different file.")
+                return None
+
             raw_text = result["candidates"][0]["content"]["parts"][0]["text"]
 
             # Clean the response - remove markdown code blocks
@@ -351,50 +281,51 @@ JOB DESCRIPTION:
             
             # Try to extract JSON if it's embedded in text
             if not cleaned_text.startswith("{"):
-                # Look for JSON object in the text
-                import re
-                json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_text, re.DOTALL)
-                if json_match:
-                    cleaned_text = json_match.group(0)
+                match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned_text, re.DOTALL)
+                if match:
+                    cleaned_text = match.group(0)
             
             try:
                 parsed_result = json.loads(cleaned_text)
                 return parsed_result
-            except json.JSONDecodeError as je:
-                # Log the problematic response for debugging
-                st.error(f"⚠️ AI response was malformed. Please retry once.")
-                with st.expander("Debug Info (Click to expand)"):
-                    st.text(f"Raw response:\n{raw_text[:500]}")
-                    st.text(f"Cleaned:\n{cleaned_text[:500]}")
-                    st.text(f"Error: {str(je)}")
+            except json.JSONDecodeError:
+                # Fallback: Try to find just the score
+                score_match = re.search(r'"compatibilityScore":\s*(\d+)', raw_text)
+                if score_match:
+                    return {"compatibilityScore": int(score_match.group(1))}
+                
+                st.error("⚠️ Analysis incomplete. Please try again.")
                 return None
 
-        except json.JSONDecodeError:
-            st.error("⚠️ AI response was malformed. Please retry once.")
-            return None
-
+        except requests.exceptions.Timeout:
+            print(f"DEBUG: Timeout error with {model}")
+            last_error_msg = f"Connection timeout. Please try again."
+            continue
         except requests.exceptions.RequestException as e:
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_details = e.response.json()
-                    error_msg = error_details.get("error", {}).get("message", str(e))
-                except:
-                    error_msg = e.response.text or str(e)
-                st.error(f"❌ Gemini API Error ({e.response.status_code}): {error_msg}")
-            else:
-                st.error(f"⚠️ Connection Error: {e}")
-            return None
-
+            print(f"DEBUG: Connection error with {model}: {str(e)}")
+            last_error_msg = f"Connection error. Please try again."
+            continue
+    
+    print(f"DEBUG: All models failed. Last error: {last_error_msg}")
+    st.error(f"❌ Analysis failed: {last_error_msg}")
     return None
 
-# ---------------- UI ----------------
-col_logo_1, col_logo_2, col_logo_3 = st.columns([1, 2, 1])
-with col_logo_2:
-    if os.path.exists("hr-tek-systems-logo.jpg"):
-        st.image("hr-tek-systems-logo.jpg", use_column_width=True)
+# ---------------- LOGO ----------------
+if os.path.exists("hr-tek-systems-logo.jpg"):
+    import base64
+    with open("hr-tek-systems-logo.jpg", "rb") as f:
+        logo_base64 = base64.b64encode(f.read()).decode()
+    st.markdown(
+        f"""
+        <div style="display: flex; justify-content: center; margin-bottom: 0rem;">
+            <img src="data:image/jpeg;base64,{logo_base64}" width="300">
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 st.markdown('<h1 class="main-title">ATS Resume Compatibility Checker</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">As a Hybrid SAAS HR Digital Transformation</p>', unsafe_allow_html=True)
+st.markdown('<p style="text-align: center; color: gray; font-size: 1.2rem;">As a Hybrid SAAS HR Digital Transformation</p>', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
 
@@ -404,7 +335,7 @@ with col1:
     resume_text = None
 
     if method == "Upload File":
-        file = st.file_uploader("Upload your resume in PDF format", type=["pdf"])
+        file = st.file_uploader("Upload PDF", type=["pdf"])
         if file:
             resume_text = extract_text_from_pdf(file)
     else:
@@ -422,32 +353,28 @@ with col1:
         list(PREDEFINED_JOB_DESCRIPTIONS.keys())
     )
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    analyze_button = st.button("Analyze Compatibility", type="primary", use_container_width=True)
-
 with col2:
-    st.header("Job Description")
     if selected_jd != "Custom Job Description":
         job_description = PREDEFINED_JOB_DESCRIPTIONS[selected_jd]
-        st.text_area("Job Description", job_description, height=400, label_visibility="collapsed")
+        st.text_area("Job Description", job_description, height=400, disabled=True)
     else:
-        job_description = st.text_area("Paste Job Description", height=300, label_visibility="collapsed")
-    
+        job_description = st.text_area("Paste Job Description", height=300)
 
 # ---------------- ANALYSIS ----------------
-if analyze_button:
+if st.button("Analyze Compatibility", type="primary", use_container_width=True):
     if not resume_text:
-        st.error("Could not extract text from the uploaded PDF. Please ensure it's not a scanned image or check OCR configuration.")
+        st.error("Could not extract text from the uploaded PDF. Please ensure it's a text-based PDF (not a scanned image).")
     elif not job_description:
         st.warning("Please provide a job description.")
     else:
-        with st.spinner("Analyzing the resume..."):
+        with st.spinner("Analyzing Resume..."):
             result = get_gemini_analysis(resume_text, job_description)
 
             if result:
+                # Only Display Score as requested
                 st.markdown(f"""
                 <div style="text-align: center; margin-top: 2rem;">
                     <h2>Compatibility Score</h2>
-                    <h1 style="font-size: 5rem; color: #2563eb;">{result['compatibilityScore']}%</h1>
+                    <h1 style="font-size: 5rem; color: #2563eb;">{result.get('compatibilityScore', 0)}%</h1>
                 </div>
                 """, unsafe_allow_html=True)
